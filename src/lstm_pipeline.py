@@ -131,8 +131,8 @@ class YouTubeLSTMPipeline:
         
         model.compile(
             optimizer=Adam(learning_rate=0.001),
-            loss='mse',
-            metrics=['mae']
+            loss='mean_squared_error',
+            metrics=['mean_absolute_error']
         )
         
         return model
@@ -147,8 +147,8 @@ class YouTubeLSTMPipeline:
         
         # Start MLflow run if available
         if MLFLOW_AVAILABLE:
-            # Use local directory for MLflow tracking
-            mlflow.set_tracking_uri("file:./mlruns")
+            # Connect to Docker MLflow server
+            mlflow.set_tracking_uri("http://localhost:5001")
             mlflow.set_experiment("YouTube LSTM Models")
         
         # Get training data
