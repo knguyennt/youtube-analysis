@@ -61,4 +61,4 @@ class CSVKafkaProducer:
 
 if __name__ == "__main__":
     producer = CSVKafkaProducer()
-    producer.simulate_realtime_from_directory('/home/yukisola/Workspace/repos/youtube-analysis/data')
+    producer.simulate_realtime_from_directory('/Users/nguyennguyen/workspace/youtube-analysis/data')

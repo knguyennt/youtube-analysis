@@ -31,6 +31,65 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def calculate_enhanced_metrics(y_true, y_pred, scaler, target_column):
+    """Calculate business-interpretable metrics"""
+    try:
+        # Flatten arrays if needed
+        y_true = np.array(y_true).flatten()
+        y_pred = np.array(y_pred).flatten()
+        
+        # Convert back to real scale for interpretation
+        # Create dummy arrays for inverse transform with proper shape
+        dummy_shape = (len(y_true), scaler.n_features_in_)
+        y_true_dummy = np.zeros(dummy_shape)
+        y_pred_dummy = np.zeros(dummy_shape)
+        
+        y_true_dummy[:, target_column] = y_true
+        y_pred_dummy[:, target_column] = y_pred
+        
+        # Inverse transform to get real values
+        y_true_real = scaler.inverse_transform(y_true_dummy)[:, target_column]
+        y_pred_real = scaler.inverse_transform(y_pred_dummy)[:, target_column]
+        
+        # Ensure no negative predictions (YouTube metrics can't be negative)
+        y_pred_real = np.maximum(y_pred_real, 0)
+        
+        # Calculate MAPE (Mean Absolute Percentage Error)
+        # Avoid division by zero
+        mask = y_true_real > 0
+        if np.sum(mask) > 0:
+            mape = np.mean(np.abs((y_true_real[mask] - y_pred_real[mask]) / y_true_real[mask])) * 100
+        else:
+            mape = float('inf')
+        
+        # Real-scale MAE
+        real_mae = np.mean(np.abs(y_true_real - y_pred_real))
+        
+        # Directional accuracy (trend prediction)
+        if len(y_true_real) > 1:
+            true_direction = np.diff(y_true_real) > 0
+            pred_direction = np.diff(y_pred_real) > 0
+            directional_accuracy = np.mean(true_direction == pred_direction) * 100
+        else:
+            directional_accuracy = 0.0
+        
+        return {
+            'mape': mape,
+            'real_mae': real_mae,
+            'directional_accuracy': directional_accuracy,
+            'avg_true_value': np.mean(y_true_real),
+            'avg_pred_value': np.mean(y_pred_real)
+        }
+    except Exception as e:
+        logger.warning(f"Could not calculate enhanced metrics: {e}")
+        return {
+            'mape': float('inf'),
+            'real_mae': float('inf'),
+            'directional_accuracy': 0.0,
+            'avg_true_value': 0.0,
+            'avg_pred_value': 0.0
+        }
+
 class YouTubeLSTMPipeline:
     def __init__(self):
         self.db_config = {
@@ -148,7 +207,7 @@ class YouTubeLSTMPipeline:
         # Start MLflow run if available
         if MLFLOW_AVAILABLE:
             # Connect to Docker MLflow server
-            mlflow.set_tracking_uri("http://localhost:5001")
+            mlflow.set_tracking_uri("file:./mlruns")
             mlflow.set_experiment("YouTube LSTM Models")
         
         # Get training data
@@ -210,17 +269,40 @@ class YouTubeLSTMPipeline:
                 mae = mean_absolute_error(y_test, y_pred)
                 mse = mean_squared_error(y_test, y_pred)
                 
-                # Log metrics
+                # Calculate enhanced metrics
+                enhanced_metrics = calculate_enhanced_metrics(y_test, y_pred, self.scaler, target_col)
+                
+                # Log standard metrics
                 mlflow.log_metric("mae", mae)
                 mlflow.log_metric("mse", mse)
                 mlflow.log_metric("epochs_trained", len(history.history['loss']))
                 mlflow.log_metric("final_train_loss", history.history['loss'][-1])
                 mlflow.log_metric("final_val_loss", history.history['val_loss'][-1])
                 
+                # Log enhanced metrics
+                mlflow.log_metric("mape", enhanced_metrics['mape'])
+                mlflow.log_metric("real_mae", enhanced_metrics['real_mae'])
+                mlflow.log_metric("directional_accuracy", enhanced_metrics['directional_accuracy'])
+                mlflow.log_metric("avg_true_value", enhanced_metrics['avg_true_value'])
+                mlflow.log_metric("avg_pred_value", enhanced_metrics['avg_pred_value'])
+                
+                # Log model quality assessment
+                model_quality = "Excellent" if enhanced_metrics['mape'] < 5 else \
+                               "Good" if enhanced_metrics['mape'] < 10 else \
+                               "Fair" if enhanced_metrics['mape'] < 20 else "Poor"
+                mlflow.log_param("model_quality", model_quality)
+                
                 # Log model
                 mlflow.tensorflow.log_model(model, f"lstm_{target}_model")
                 
-                logger.info(f"LSTM {target} model - MAE: {mae:.6f}, MSE: {mse:.6f}")
+                logger.info(f"LSTM {target} model training completed:")
+                logger.info(f"  • MAE: {mae:.6f} (normalized)")
+                logger.info(f"  • MAPE: {enhanced_metrics['mape']:.2f}% (business metric)")
+                logger.info(f"  • Real MAE: {enhanced_metrics['real_mae']:.0f} {target}")
+                logger.info(f"  • Directional Accuracy: {enhanced_metrics['directional_accuracy']:.1f}%")
+                logger.info(f"  • Model Quality: {model_quality}")
+                logger.info(f"  • Avg True Value: {enhanced_metrics['avg_true_value']:.0f}")
+                logger.info(f"  • Avg Predicted Value: {enhanced_metrics['avg_pred_value']:.0f}")
         else:
             # Fallback training without MLflow
             model = self.create_lstm_model((self.sequence_length, X.shape[2]))
@@ -244,7 +326,19 @@ class YouTubeLSTMPipeline:
             mae = mean_absolute_error(y_test, y_pred)
             mse = mean_squared_error(y_test, y_pred)
             
-            logger.info(f"LSTM {target} model - MAE: {mae:.6f}, MSE: {mse:.6f}")
+            # Calculate enhanced metrics even without MLflow
+            enhanced_metrics = calculate_enhanced_metrics(y_test, y_pred, self.scaler, target_col)
+            
+            model_quality = "Excellent" if enhanced_metrics['mape'] < 5 else \
+                           "Good" if enhanced_metrics['mape'] < 10 else \
+                           "Fair" if enhanced_metrics['mape'] < 20 else "Poor"
+            
+            logger.info(f"LSTM {target} model training completed:")
+            logger.info(f"  • MAE: {mae:.6f} (normalized)")
+            logger.info(f"  • MAPE: {enhanced_metrics['mape']:.2f}% (business metric)")
+            logger.info(f"  • Real MAE: {enhanced_metrics['real_mae']:.0f} {target}")
+            logger.info(f"  • Directional Accuracy: {enhanced_metrics['directional_accuracy']:.1f}%")
+            logger.info(f"  • Model Quality: {model_quality}")
         
         # Save model
         model_path = f'models/lstm_{target}_model.h5'
@@ -255,13 +349,24 @@ class YouTubeLSTMPipeline:
         with open(scaler_path, 'wb') as f:
             pickle.dump(self.scaler, f)
         
-        # Store metrics
-        metrics = {
-            'mae': mae,
-            'mse': mse,
-            'training_sequences': len(X_train),
-            'epochs_trained': len(history.history['loss'])
-        }
+        # Store metrics (use enhanced_metrics if available, otherwise calculate basic ones)
+        if 'enhanced_metrics' in locals():
+            metrics = {
+                'mae': mae,
+                'mse': mse,
+                'mape': enhanced_metrics['mape'],
+                'real_mae': enhanced_metrics['real_mae'],
+                'directional_accuracy': enhanced_metrics['directional_accuracy'],
+                'training_sequences': len(X_train),
+                'epochs_trained': len(history.history['loss'])
+            }
+        else:
+            metrics = {
+                'mae': mae,
+                'mse': mse,
+                'training_sequences': len(X_train),
+                'epochs_trained': len(history.history['loss'])
+            }
         self.store_model_metrics(f'lstm_{target}', metrics)
         
         self.models[target] = model
