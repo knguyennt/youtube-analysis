@@ -13,23 +13,17 @@ A simple real-time analytics pipeline for YouTube video statistics using Kafka, 
 
 ## Quick Start
 ```bash
-# 1. Start infrastructure services
 docker-compose up -d
 
-# 2. Activate Python environment
-pyenv activate youtube-analysis
-
-# 3. Run data producer (CSV → Kafka)
 python src/kafka_producer.py
 
-# 4. Run stream processor (Kafka → PostgreSQL)
 python src/spark_streaming.py
 
-# 5. Run LSTM ML pipeline (Training & Predictions)
 python src/lstm_pipeline.py
 
-# 6. Optional: Run prediction scheduler (includes auto-training if needed)
 python src/prediction_scheduler.py --mode auto --interval 300
+
+python -m mlflow ui --backend-store-uri file:./mlruns --port 5002
 ```
 
 ## Training & Prediction Modes
